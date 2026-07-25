@@ -1,0 +1,53 @@
+#pragma once
+
+#include <cstdint>
+#include <vector>
+
+struct Order {
+  uint64_t orderRefNumber;
+  uint32_t shares;
+  uint32_t price;
+  uint32_t next_index{0xFFFFFFFF};
+  uint32_t prev_index{0xFFFFFFFF};
+};
+
+class OrderPool {
+private:
+  std::vector<Order> pool;
+  std::vector<uint32_t> free_indices;
+
+  uint32_t top{MAX_SIZE - 1};
+  static constexpr uint32_t MAX_SIZE = 1000000;
+  static constexpr uint32_t NULL_INDEX = 0xFFFFFFFF;
+
+public:
+  OrderPool() {
+    pool.resize(MAX_SIZE);
+    free_indices.resize(MAX_SIZE);
+    for (int i = 0; i < MAX_SIZE; i++) {
+      free_indices[i] = i;
+    }
+  }
+
+  uint32_t allocate() {
+    uint32_t res{0};
+    if (top == NULL_INDEX) {
+      return NULL_INDEX;
+    }
+
+    res = free_indices[top];
+    top--;
+    return res;
+  }
+
+  void deallocate(uint32_t index) {
+    if (top + 1 >= MAX_SIZE) {
+      return;
+    }
+
+    top++;
+    free_indices[top] = index;
+  }
+
+  Order &getOrder(uint32_t index) { return pool[index]; }
+};
