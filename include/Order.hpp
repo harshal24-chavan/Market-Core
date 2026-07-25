@@ -21,7 +21,7 @@ private:
   static constexpr uint32_t NULL_INDEX = 0xFFFFFFFF;
 
 public:
-  OrderPool() {
+  OrderPool() noexcept {
     pool.resize(MAX_SIZE);
     free_indices.resize(MAX_SIZE);
     for (int i = 0; i < MAX_SIZE; i++) {
@@ -29,7 +29,8 @@ public:
     }
   }
 
-  uint32_t allocate() {
+  /* gives free index where we can store orders*/
+  uint32_t allocate() noexcept {
     uint32_t res{0};
     if (top == NULL_INDEX) {
       return NULL_INDEX;
@@ -40,7 +41,8 @@ public:
     return res;
   }
 
-  void deallocate(uint32_t index) {
+  /* returns the index to the pool for reuse*/
+  void deallocate(uint32_t index) noexcept {
     if (top + 1 >= MAX_SIZE) {
       return;
     }
@@ -49,5 +51,5 @@ public:
     free_indices[top] = index;
   }
 
-  Order &getOrder(uint32_t index) { return pool[index]; }
+  Order &getOrder(uint32_t index) noexcept { return pool[index]; }
 };
