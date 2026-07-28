@@ -35,7 +35,7 @@ public:
 
   ~MmappedFile() {
     if (data_)
-      munmap(data_, size_);
+      munmap(const_cast<char *>(data_), size_);
 
     if (fd_ != -1)
       close(fd_);

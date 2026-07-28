@@ -1,14 +1,20 @@
 #pragma once
 
 #include <cstdint>
+#include <limits>
 #include <vector>
+
+constexpr uint64_t EMPTY_SLOT = 0;
+constexpr uint64_t TOMBSTONE = std::numeric_limits<uint64_t>::max();
+constexpr uint32_t NULL_INDEX = 0xFFFFFFFF;
 
 struct Order {
   uint64_t orderRefNumber;
   uint32_t shares;
   uint32_t price;
-  uint32_t next_index{0xFFFFFFFF};
-  uint32_t prev_index{0xFFFFFFFF};
+  uint32_t next_index{NULL_INDEX};
+  uint32_t prev_index{NULL_INDEX};
+  uint8_t side; // buy = 0, ask = 1
 };
 
 class OrderPool {
@@ -18,7 +24,6 @@ private:
 
   uint32_t top{MAX_SIZE - 1};
   static constexpr uint32_t MAX_SIZE = 1000000;
-  static constexpr uint32_t NULL_INDEX = 0xFFFFFFFF;
 
 public:
   OrderPool() noexcept {
