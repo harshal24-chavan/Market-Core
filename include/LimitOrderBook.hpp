@@ -5,6 +5,7 @@
 #include "Order.hpp"
 #include "SlabAllocator.hpp"
 #include <cstdint>
+#include <limits>
 
 struct PriceLevel {
   uint32_t price;
@@ -143,6 +144,39 @@ public:
     if (order.shares == 0) {
       order_map.erase(order_id);
       order_pool.free(order_index);
+    }
+  }
+
+  void match_order(Order &incoming_order) {
+    // buy order
+
+    while (incoming_order.shares) {
+      uint32_t best_ask = ask_bitmask.get_best_ask();
+      if (best_ask > incoming_order.price) {
+        break;
+      }
+
+      PriceLevel &level = ask_levels[best_ask];
+      uint32_t node = level.head_index;
+      while (node != NULL_INDEX) {
+        Order &order = order_pool.get(node);
+
+        uint32_t executed_shares =
+            std::min(incoming_order.shares, order.shares);
+
+        auto next_index = order.next_index;
+        execute_order(level, node, executed_shares);
+
+        if (order.shares == 0) {
+          order_map.erase(order.orderRefNumber);
+          order_pool.free(node);
+        }
+        node = next_index;
+
+        incoming_order.shares -= executed_shares;
+        if (!incoming_order.shares)
+          break;
+      }
     }
   }
 };
