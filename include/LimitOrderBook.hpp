@@ -13,7 +13,7 @@
 uint8_t Buy = 0;
 uint8_t Ask = 1;
 
-struct PriceLevel {
+struct alignas(8) PriceLevel {
 
   // not needed as we are using price as the array index
   // uint32_t price;
@@ -43,16 +43,14 @@ private:
   // Ask)
   std::map<uint32_t, PriceLevel> sparse_asks;
 
-  static constexpr uint32_t MAX_PRICES = 1U << 27; // 2^25
+  static constexpr uint32_t MAX_PRICES = 1U << 21; // 2^25
 
-  PriceLevel &get_price_level(uint8_t side, uint32_t price) {
+  inline PriceLevel &get_price_level(uint8_t side, uint32_t price) {
     if (price < MAX_PRICES) {
-      // THE HOT PATH: O(1) Array Lookup
-      return (side == 0) ? bid_levels[price] : ask_levels[price];
-    } else {
-      // THE COLD PATH: O(log N) Tree Lookup for Outliers
-      return (side == 0) ? sparse_bids[price] : sparse_asks[price];
+      return side == 0 ? bid_levels[price] : ask_levels[price];
     }
+
+    return side == 0 ? sparse_bids[price] : sparse_asks[price];
   }
 
   void append_order(PriceLevel &level, uint32_t order_index) noexcept {
@@ -66,9 +64,11 @@ private:
       newOrder.next_index = NULL_INDEX;
       newOrder.prev_index = NULL_INDEX;
 
-      if (newOrder.price < MAX_PRICES) {
-        auto &bitmaskTree = !newOrder.side ? bid_bitmask : ask_bitmask;
-        bitmaskTree.set_active(newOrder.price);
+      uint32_t price = newOrder.price_and_side >> 1;
+      uint8_t side = newOrder.price_and_side & 1;
+      if (price < MAX_PRICES) {
+        auto &bitmaskTree = (side == Buy) ? bid_bitmask : ask_bitmask;
+        bitmaskTree.set_active(price);
       }
 
     } else {
@@ -104,9 +104,11 @@ private:
     }
 
     if (level.head_index == NULL_INDEX) {
-      if (order.price < MAX_PRICES) {
-        auto &bitmaskTree = order.side == Buy ? bid_bitmask : ask_bitmask;
-        bitmaskTree.clear_active(order.price);
+      uint32_t price = order.price_and_side >> 1;
+      uint8_t side = order.price_and_side & 1;
+      if (price < MAX_PRICES) {
+        auto &bitmaskTree = side == Buy ? bid_bitmask : ask_bitmask;
+        bitmaskTree.clear_active(price);
       }
     }
 
@@ -129,18 +131,26 @@ private:
   }
 
 public:
-  LimitOrderbook()
-      : order_map(26), bid_levels(1u << 27), ask_levels(1u << 27) {}
+  LimitOrderbook() : order_map(23) {
+
+    bid_levels.resize(MAX_PRICES);
+    madvise(bid_levels.data(), bid_levels.size() * sizeof(PriceLevel),
+            MADV_HUGEPAGE);
+
+    ask_levels.resize(MAX_PRICES);
+    madvise(ask_levels.data(), ask_levels.size() * sizeof(PriceLevel),
+            MADV_HUGEPAGE);
+  }
 
   void process_add(uint64_t order_id, uint32_t price, uint32_t shares,
                    uint8_t side) noexcept {
+
     uint32_t order_index = order_pool.allocate();
 
     Order &order = order_pool.get(order_index);
-    order.orderRefNumber = order_id;
-    order.price = price;
+    order.price_and_side = price;
     order.shares = shares;
-    order.side = side;
+    order.price_and_side = (order.price_and_side << 1) + side;
 
     order_map.insert(order_id, order_index);
 
@@ -154,9 +164,13 @@ public:
     if (order_index == NULL_INDEX)
       return;
 
+    __builtin_prefetch(&order_pool.get(order_index), 1, 3);
+
     Order &order = order_pool.get(order_index);
 
-    PriceLevel &level = get_price_level(order.side, order.price);
+    uint32_t oprice = order.price_and_side >> 1;
+    uint8_t oside = order.price_and_side & 1;
+    PriceLevel &level = get_price_level(oside, oprice);
 
     remove_order(level, order_index);
 
@@ -172,6 +186,8 @@ public:
       return;
     }
 
+    __builtin_prefetch(&order_pool.get(order_index), 1, 3);
+
     Order &order = order_pool.get(order_index);
 
     if (canceled_shares >= order.shares) {
@@ -181,7 +197,9 @@ public:
 
     order.shares -= canceled_shares;
 
-    PriceLevel &level = get_price_level(order.side, order.price);
+    uint32_t oprice = order.price_and_side >> 1;
+    uint8_t oside = order.price_and_side & 1;
+    PriceLevel &level = get_price_level(oside, oprice);
     // level.total_volume -= canceled_shares;
   }
 
@@ -190,8 +208,16 @@ public:
     if (order_index == NULL_INDEX)
       return;
 
+    // PREFETCH: Tell CPU to start fetching the Order cache line from DRAM
+    // immediately
+    __builtin_prefetch(&order_pool.get(order_index), 1,
+                       3); // 1 = write intent, 3 = high temporal locality
+
     Order &order = order_pool.get(order_index);
-    PriceLevel &level = get_price_level(order.side, order.price);
+
+    uint32_t oprice = order.price_and_side >> 1;
+    uint8_t oside = order.price_and_side & 1;
+    PriceLevel &level = get_price_level(oside, oprice);
 
     execute_order(level, order_index, executed_shares);
 
@@ -201,60 +227,57 @@ public:
     }
   }
 
-  void match_order(AddOrder &incoming_order) {
-    bool isBuy = (incoming_order.buySellIndicator == 'B');
-
-    while (incoming_order.shares) {
-      uint32_t best_price;
-
-      if (isBuy) {
-        best_price = ask_bitmask.get_best_ask();
-        if (best_price > incoming_order.price)
-          break;
-
-      } else {
-        best_price = bid_bitmask.get_best_bid();
-        if (best_price < incoming_order.price)
-          break;
-      }
-
-      // If isBuy is true, fetch side 1 (Ask). If false, fetch side 0 (Bid).
-      PriceLevel &level = get_price_level(isBuy ? 1 : 0, best_price);
-      uint32_t node = level.head_index;
-
-      while (node != NULL_INDEX) {
-        Order &order = order_pool.get(node);
-
-        uint32_t executed_shares =
-            std::min(incoming_order.shares, order.shares);
-
-        auto next_index = order.next_index;
-        execute_order(level, node, executed_shares);
-
-        if (order.shares <= 0) {
-          order_map.erase(order.orderRefNumber);
-          order_pool.free(node);
-        }
-        node = next_index;
-
-        incoming_order.shares -= executed_shares;
-        if (incoming_order.shares <= 0)
-          break;
-      }
-    }
-  }
+  //  void match_order(AddOrder &incoming_order) {
+  //    bool isBuy = (incoming_order.buySellIndicator == 'B');
+  //
+  //    while (incoming_order.shares) {
+  //      uint32_t best_price;
+  //
+  //      if (isBuy) {
+  //        best_price = ask_bitmask.get_best_ask();
+  //        if (best_price > incoming_order.price)
+  //          break;
+  //
+  //      } else {
+  //        best_price = bid_bitmask.get_best_bid();
+  //        if (best_price < incoming_order.price)
+  //          break;
+  //      }
+  //
+  //      // If isBuy is true, fetch side 1 (Ask). If false, fetch side 0 (Bid).
+  //      PriceLevel &level = get_price_level(isBuy ? 1 : 0, best_price);
+  //      uint32_t node = level.head_index;
+  //
+  //      while (node != NULL_INDEX) {
+  //        Order &order = order_pool.get(node);
+  //
+  //        uint32_t executed_shares =
+  //            std::min(incoming_order.shares, order.shares);
+  //
+  //        auto next_index = order.next_index;
+  //        execute_order(level, node, executed_shares);
+  //
+  //        if (order.shares <= 0) {
+  //          order_map.erase(order.orderRefNumber);
+  //          order_pool.free(node);
+  //        }
+  //        node = next_index;
+  //
+  //        incoming_order.shares -= executed_shares;
+  //        if (incoming_order.shares <= 0)
+  //          break;
+  //      }
+  //    }
+  //  }
 
   void on_add_message(const AddOrder *msg) {
-    AddOrder activeOrder = *(msg);
-    // match_order(activeOrder);
 
-    if (activeOrder.shares > 0) {
-      uint64_t order_ref = activeOrder.orderRefNumber;
-      uint32_t price = activeOrder.price;
-      uint32_t shares = activeOrder.shares;
-      uint8_t side = (activeOrder.buySellIndicator == 'B') ? 0 : 1;
+    if (msg->shares > 0) {
+      uint32_t price = msg->price;
+      uint32_t shares = msg->shares;
+      uint8_t side = (msg->buySellIndicator == 'B') ? 0 : 1;
 
-      process_add(order_ref, price, shares, side);
+      process_add(msg->orderRefNumber, price, shares, side);
     }
   }
   void on_delete_message(const OrderDelete *msg) {
@@ -272,7 +295,7 @@ public:
     }
 
     Order &og_order = order_pool.get(og_order_index);
-    uint8_t side = og_order.side;
+    uint8_t side = og_order.price_and_side & 1;
     process_cancel(og_order_id);
 
     AddOrder newOrder;
@@ -281,7 +304,7 @@ public:
     newOrder.shares = msg->shares;
     newOrder.buySellIndicator = (side == 0) ? 'B' : 'S';
 
-    on_add_message(&newOrder);
+    process_add(msg->newOrderRefNumber, msg->price, msg->shares, side);
   }
 
   void on_cancel_message(const OrderCancel *msg) {
@@ -296,7 +319,7 @@ public:
    *
    *
    *
-   * */
+   *
   void validate_level(const PriceLevel &level, uint8_t expected_side,
                       uint32_t expected_price) {
     // Empty State Invariant
@@ -355,17 +378,5 @@ public:
       validate_level(ask_levels[price], 1, price);
     }
   }
-  /*
-   *
-   *
-   *
-   *
-   *
-   *
-   *
-   *
-   *
-   *
-   *
-   */
+  */
 };

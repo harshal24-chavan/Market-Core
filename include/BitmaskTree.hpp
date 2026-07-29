@@ -10,7 +10,7 @@ static constexpr uint32_t words_needed(uint32_t bits) noexcept {
 
 class BitmaskTree {
 private:
-  static constexpr uint32_t MAX_PRICES = 1U << 27; // 2^25
+  static constexpr uint32_t MAX_PRICES = 1U << 21; // 2^21
 
   static constexpr uint32_t L0_SIZE = words_needed(MAX_PRICES);
   static constexpr uint32_t L1_SIZE = words_needed(L0_SIZE);

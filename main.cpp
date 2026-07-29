@@ -1,3 +1,4 @@
+#include "include/FlatHashTable.hpp"
 #include "include/LimitOrderBook.hpp"
 #include "include/MmappedFile.hpp"
 #include "include/messages.hpp"
@@ -5,6 +6,16 @@
 #include <pthread.h>
 #include <sched.h>
 #include <stdexcept>
+
+inline uint32_t to_dense_index(uint32_t itch_price) noexcept {
+  // Sub-dollar prices ($0.0000 to $0.9999) keep 0.0001 granularity
+  if (itch_price < 10000) {
+    return itch_price;
+  }
+  // Prices >= $1.00 are scaled to 0.01 granularity (cents)
+  // Offset by 10000 so they seamlessly continue after the sub-dollar range
+  return 10000 + ((itch_price - 10000) / 100);
+}
 
 void pin_thread_to_core(int core_id) {
   cpu_set_t cpuset;
@@ -60,7 +71,7 @@ int main() {
 
         msg.orderRefNumber = bswap64(msg.orderRefNumber);
         msg.shares = bswap32(msg.shares);
-        msg.price = bswap32(msg.price);
+        msg.price = to_dense_index(bswap32(msg.price));
 
         lob.on_add_message(&msg);
         break;
@@ -101,7 +112,7 @@ int main() {
         msg.originalOrderRefNumber = bswap64(msg.originalOrderRefNumber);
         msg.newOrderRefNumber = bswap64(msg.newOrderRefNumber);
         msg.shares = bswap32(msg.shares);
-        msg.price = bswap32(msg.price);
+        msg.price = to_dense_index(bswap32(msg.price));
 
         lob.on_replace_message(&msg);
         break;
@@ -114,14 +125,9 @@ int main() {
       // Advance the pointer to the next message
       ptr += msg_length;
       message_count++;
-
-      if (message_count % 1000000 == 0) {
-        std::cout << "Processed " << message_count << std::endl;
-      }
     }
 
-    std::cout << "Replay completed successfully. " << message_count
-              << " messages proven correct.\n";
+    std::cout << "Replay completed successfully. " << message_count << "\n";
   } catch (const std::exception &e) {
     std::cerr << "Fatal Error: " << e.what() << '\n';
     return 1;

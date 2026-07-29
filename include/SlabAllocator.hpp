@@ -2,64 +2,90 @@
 
 #include <cassert>
 #include <cstdint>
-#include <vector>
+#include <cstdlib>
+#include <cstring>
+#include <iostream>
+#include <sys/mman.h>
 
 template <typename T, uint32_t SLAB_BITS = 20> class SlabAllocator {
 private:
-  static constexpr uint32_t SLAB_SIZE = 1 << SLAB_BITS;
+  static constexpr uint32_t SLAB_SIZE = 1U << SLAB_BITS;
   static constexpr uint32_t SLAB_MASK = SLAB_SIZE - 1;
+  static constexpr uint32_t MAX_SLABS = 64; // Supports up to ~67 Million Orders
 
-  std::vector<T *> slabs;
-  std::vector<uint32_t> free_list;
-  uint32_t total_capacity = 0;
+  T *slabs[MAX_SLABS]{nullptr};
+  uint32_t num_slabs = 0;
+  uint32_t head_free =
+      std::numeric_limits<uint32_t>::max(); // Intrusive Free-List Head
 
   void allocate_slab() {
-    T *newSlab = new T[SLAB_SIZE];
-    slabs.push_back(newSlab);
-    uint32_t base_index = total_capacity;
+    assert(num_slabs < MAX_SLABS && "Exceeded maximum slab capacity!");
+
+    size_t slab_bytes = sizeof(T) * SLAB_SIZE;
+    void *raw_ptr = nullptr;
+
+    int res = posix_memalign(&raw_ptr, 2 * 1024 * 1024, slab_bytes);
+    assert(res == 0 && "Failed to allocate 2MB aligned memory slab!");
+
+    T *newSlab = static_cast<T *>(raw_ptr);
+    madvise(newSlab, slab_bytes, MADV_HUGEPAGE);
+
+    slabs[num_slabs] = newSlab;
+    uint32_t base_index = num_slabs * SLAB_SIZE;
     uint32_t start_offset = (base_index == 0) ? 1 : 0;
 
-    free_list.reserve(total_capacity + SLAB_SIZE);
-
+    // Build the intrusive list from HIGHEST index down to LOWEST index.
+    // This guarantees head_free ends up at 'base_index + start_offset',
+    // forcing allocate() to hand out memory in ASCENDING ORDER (1, 2, 3, 4...).
     for (uint32_t i = SLAB_SIZE; i-- > start_offset;) {
-      if (base_index == 0 && i == 0)
-        break;
-
-      // push the new added slab indexes into the free_list
-      // but won't this push_back trigger copy when size increases?
-      // no actually we have reserved memory upfront so no copy and resize
-      // and shrinking doesn't happen so .... noe worries
-      free_list.push_back(base_index + i);
+      uint32_t global_index = base_index + i;
+      *reinterpret_cast<uint32_t *>(&newSlab[i]) = head_free;
+      head_free = global_index;
     }
 
-    total_capacity += SLAB_SIZE;
+    num_slabs++;
   }
 
 public:
   SlabAllocator() { allocate_slab(); }
 
   ~SlabAllocator() {
-    for (T *slab : slabs) {
-      delete[] slab;
+    for (uint32_t i = 0; i < num_slabs; ++i) {
+      if (slabs[i]) {
+        std::free(slabs[i]);
+      }
     }
   }
 
-  uint32_t allocate() {
-    if (free_list.empty()) {
+  uint32_t allocate() noexcept {
+    if (head_free == std::numeric_limits<uint32_t>::max()) {
       allocate_slab();
     }
 
-    uint32_t index = free_list.back();
-    free_list.pop_back();
+    uint32_t allocated_index = head_free;
 
-    return index;
+    // Read the next free index stored inside the slot being allocated
+    T &slot = get(allocated_index);
+    head_free = *reinterpret_cast<uint32_t *>(&slot);
+
+    return allocated_index;
   }
 
-  void free(uint32_t index) { free_list.push_back(index); }
+  void free(uint32_t index) noexcept {
+    // Intrusively link freed node back into the head of the free list
+    T &slot = get(index);
+    *reinterpret_cast<uint32_t *>(&slot) = head_free;
+    head_free = index;
+  }
 
-  inline T &get(uint32_t index) {
-    // first 12 bits of index to show the slab
-    // next 20 bits to show the index within the slab
+  inline T &get(uint32_t index) noexcept {
+    uint32_t slab = index >> SLAB_BITS;
+    uint32_t slot_index = index & SLAB_MASK;
+
+    return slabs[slab][slot_index];
+  }
+
+  inline const T &get(uint32_t index) const noexcept {
     uint32_t slab = index >> SLAB_BITS;
     uint32_t slot_index = index & SLAB_MASK;
 

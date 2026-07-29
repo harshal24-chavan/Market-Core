@@ -1,4 +1,5 @@
 #pragma once
+#include <algorithm>
 #include <cstdint>
 #include <limits>
 
@@ -19,7 +20,7 @@ private:
   uint32_t size_;
 
 public:
-  OrderMap(uint32_t capacity_bits = 26) {
+  OrderMap(uint32_t capacity_bits = 21) {
     capacity = 1 << capacity_bits;
     capacity_mask = capacity - 1;
 
@@ -37,11 +38,16 @@ public:
 
   inline void insert(uint64_t key, uint32_t val) noexcept {
     uint32_t ind = hash(key);
+
+    uint32_t probe = 1;
+
     while (true) {
+      probe++;
       if (table[ind].key == EMPTY_SLOT || table[ind].key == TOMBSTONE) {
         table[ind].key = key;
         table[ind].value = val;
         size_++;
+
         return;
       }
       ind = (ind + 1) & capacity_mask;
