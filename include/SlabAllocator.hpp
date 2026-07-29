@@ -21,14 +21,15 @@ private:
 
     free_list.reserve(total_capacity + SLAB_SIZE);
 
-    for (uint32_t i = SLAB_SIZE - 1; i >= start_offset; --i) {
+    for (uint32_t i = SLAB_SIZE; i-- > start_offset;) {
       if (base_index == 0 && i == 0)
         break;
 
       // push the new added slab indexes into the free_list
-      free_list.push_back(
-          base_index +
-          i); // but won't this push_back trigger copy when size increases?
+      // but won't this push_back trigger copy when size increases?
+      // no actually we have reserved memory upfront so no copy and resize
+      // and shrinking doesn't happen so .... noe worries
+      free_list.push_back(base_index + i);
     }
 
     total_capacity += SLAB_SIZE;

@@ -19,11 +19,54 @@ struct AddOrder {
   char messageType;
   uint16_t stockLocate;
   uint16_t trackingNumber;
-  uint8_t timeStamp;
+  uint8_t timeStamp[6];
   uint64_t orderRefNumber;
   char buySellIndicator;
   uint32_t shares;
   char stock[8];
   uint32_t price;
 };
+
+// 'E' - Order Executed (A resting order traded)
+struct OrderExecuted {
+  char messageType;
+  uint16_t stockLocate;
+  uint16_t trackingNumber;
+  uint8_t timeStamp[6];
+  uint64_t orderRefNumber;
+  uint32_t executedShares;
+  uint64_t matchNumber;
+};
+
+// 'X' - Order Cancel (Partial reduction of shares)
+struct OrderCancel {
+  char messageType;
+  uint16_t stockLocate;
+  uint16_t trackingNumber;
+  uint8_t timeStamp[6];
+  uint64_t orderRefNumber;
+  uint32_t canceledShares;
+};
+
+// 'D' - Order Delete (Complete removal of the order)
+struct OrderDelete {
+  char messageType;
+  uint16_t stockLocate;
+  uint16_t trackingNumber;
+  uint8_t timeStamp[6];
+  uint64_t orderRefNumber;
+};
+
+// 'U' - Order Replace (Change in price or size)
+struct OrderReplace {
+  char messageType;
+  uint16_t stockLocate;
+  uint16_t trackingNumber;
+  uint8_t timeStamp[6];
+  uint64_t originalOrderRefNumber;
+  uint64_t newOrderRefNumber;
+  uint32_t shares;
+  uint32_t price;
+};
+
 #pragma pack(pop)

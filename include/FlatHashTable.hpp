@@ -16,6 +16,7 @@ private:
   uint32_t capacity_mask;
   uint32_t capacity;
   HashEntry *table;
+  uint32_t size_;
 
 public:
   OrderMap(uint32_t capacity_bits = 26) {
@@ -40,6 +41,7 @@ public:
       if (table[ind].key == EMPTY_SLOT || table[ind].key == TOMBSTONE) {
         table[ind].key = key;
         table[ind].value = val;
+        size_++;
         return;
       }
       ind = (ind + 1) & capacity_mask;
@@ -64,10 +66,13 @@ public:
       if (table[ind].key == key) {
         table[ind].key = TOMBSTONE;
         table[ind].value = 0;
+        size_--;
         return;
       }
       ind = (ind + 1) & capacity_mask;
     }
     return;
   }
+
+  uint32_t size() { return size_; }
 };

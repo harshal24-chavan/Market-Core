@@ -1,12 +1,11 @@
 #pragma once
 
+#include "FlatHashTable.hpp"
 #include <cstdint>
 #include <limits>
 #include <vector>
 
-constexpr uint64_t EMPTY_SLOT = 0;
-constexpr uint64_t TOMBSTONE = std::numeric_limits<uint64_t>::max();
-constexpr uint32_t NULL_INDEX = 0xFFFFFFFF;
+enum class Side { Buy = 0, Ask = 1 };
 
 struct Order {
   uint64_t orderRefNumber;

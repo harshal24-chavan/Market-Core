@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <limits>
+#include <vector>
 
 static constexpr uint32_t words_needed(uint32_t bits) noexcept {
   return (bits + 63) / 64;
@@ -9,7 +10,7 @@ static constexpr uint32_t words_needed(uint32_t bits) noexcept {
 
 class BitmaskTree {
 private:
-  static constexpr uint32_t MAX_PRICES = 33554432; // 2^25
+  static constexpr uint32_t MAX_PRICES = 1U << 27; // 2^25
 
   static constexpr uint32_t L0_SIZE = words_needed(MAX_PRICES);
   static constexpr uint32_t L1_SIZE = words_needed(L0_SIZE);
@@ -137,5 +138,63 @@ public:
     auto l0_bit = __builtin_ctzll((l0_word));
 
     return (l0_word_index << 6) + l0_bit;
+  }
+
+  std::vector<uint32_t> get_active_prices() const {
+    std::vector<uint32_t> active_prices;
+    // Pre-allocate a reasonable size to avoid vector resizing overhead during
+    // testing
+    active_prices.reserve(256);
+
+    uint64_t l4_mask = level4[0];
+
+    // Level 4
+    while (l4_mask != 0) {
+      uint32_t l4_bit = __builtin_ctzll(l4_mask);
+
+      uint32_t l3_word_index = l4_bit;
+      uint64_t l3_mask = level3[l3_word_index];
+
+      // Level 3
+      while (l3_mask != 0) {
+        uint32_t l3_bit = __builtin_ctzll(l3_mask);
+
+        uint32_t l2_word_index = (l3_word_index << 6) + l3_bit;
+        uint64_t l2_mask = level2[l2_word_index];
+
+        // Level 2
+        while (l2_mask != 0) {
+          uint32_t l2_bit = __builtin_ctzll(l2_mask);
+
+          uint32_t l1_word_index = (l2_word_index << 6) + l2_bit;
+          uint64_t l1_mask = level1[l1_word_index];
+
+          // Level 1
+          while (l1_mask != 0) {
+            uint32_t l1_bit = __builtin_ctzll(l1_mask);
+
+            uint32_t l0_word_index = (l1_word_index << 6) + l1_bit;
+            uint64_t l0_mask = level0[l0_word_index];
+
+            // Level 0 (The actual prices)
+            while (l0_mask != 0) {
+              uint32_t l0_bit = __builtin_ctzll(l0_mask);
+
+              uint32_t price = (l0_word_index << 6) + l0_bit;
+              active_prices.push_back(price);
+
+              // Clear the lowest set bit to move to the next one
+              l0_mask &= (l0_mask - 1);
+            }
+            l1_mask &= (l1_mask - 1);
+          }
+          l2_mask &= (l2_mask - 1);
+        }
+        l3_mask &= (l3_mask - 1);
+      }
+      l4_mask &= (l4_mask - 1);
+    }
+
+    return active_prices;
   }
 };
