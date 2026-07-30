@@ -1,4 +1,5 @@
 #include "include/FlatHashTable.hpp"
+#include "include/LatencyHistogram.hpp"
 #include "include/LimitOrderBook.hpp"
 #include "include/MmappedFile.hpp"
 #include "include/messages.hpp"
@@ -6,6 +7,8 @@
 #include <pthread.h>
 #include <sched.h>
 #include <stdexcept>
+
+static LatencyHistogram g_histograms[MSG_COUNT];
 
 inline uint32_t to_dense_index(uint32_t itch_price) noexcept {
   // Sub-dollar prices ($0.0000 to $0.9999) keep 0.0001 granularity
@@ -34,6 +37,54 @@ void pin_thread_to_core(int core_id) {
               << "\n";
   }
 }
+
+void print_latency_report(double cpu_ghz = 3.07) {
+  const char *names[MSG_COUNT] = {"Add Order ('A'/'F')", "Execute ('E'/'C')",
+                                  "Cancel ('X')", "Delete ('D')",
+                                  "Replace ('U')"};
+  double cycles_to_ns = 1.0 / cpu_ghz;
+
+  std::cout << "\n============================================================="
+               "===========================\n";
+  std::cout << "                          NASDAQ ITCH 5.0 LATENCY HISTOGRAM    "
+               "                         \n";
+  std::cout << "==============================================================="
+               "=========================\n";
+  std::cout << std::left << std::setw(20) << "Message Type" << std::setw(12)
+            << "Count" << std::setw(12) << "Avg (ns)" << std::setw(10)
+            << "Min (ns)" << std::setw(10) << "p50 (ns)" << std::setw(10)
+            << "p90 (ns)" << std::setw(10) << "p99 (ns)" << std::setw(12)
+            << "p99.9 (ns)" << std::setw(10) << "Max (ns)" << "\n";
+  std::cout << "---------------------------------------------------------------"
+               "-------------------------\n";
+
+  for (size_t i = 0; i < MSG_COUNT; ++i) {
+    const auto &h = g_histograms[i];
+    if (h.total_count == 0)
+      continue;
+
+    double avg_cycles = static_cast<double>(h.total_cycles) / h.total_count;
+
+    std::cout << std::left << std::setw(20) << names[i] << std::setw(12)
+              << h.total_count << std::setw(12) << std::fixed
+              << std::setprecision(1) << (avg_cycles * cycles_to_ns)
+              << std::setw(10)
+              << static_cast<uint64_t>(h.min_cycles * cycles_to_ns)
+              << std::setw(10)
+              << static_cast<uint64_t>(h.get_percentile(0.50) * cycles_to_ns)
+              << std::setw(10)
+              << static_cast<uint64_t>(h.get_percentile(0.90) * cycles_to_ns)
+              << std::setw(10)
+              << static_cast<uint64_t>(h.get_percentile(0.99) * cycles_to_ns)
+              << std::setw(12)
+              << static_cast<uint64_t>(h.get_percentile(0.999) * cycles_to_ns)
+              << std::setw(10)
+              << static_cast<uint64_t>(h.max_cycles * cycles_to_ns) << "\n";
+  }
+  std::cout << "==============================================================="
+               "=========================\n";
+}
+
 int main() {
   pin_thread_to_core(2);
 
@@ -73,7 +124,10 @@ int main() {
         msg.shares = bswap32(msg.shares);
         msg.price = to_dense_index(bswap32(msg.price));
 
+        uint64_t start = rdtsc_start();
         lob.on_add_message(&msg);
+        uint64_t elapsed = rdtsc_end() - start;
+        g_histograms[MSG_ADD].record(elapsed);
         break;
       }
       case 'D': {
@@ -82,7 +136,10 @@ int main() {
 
         msg.orderRefNumber = bswap64(msg.orderRefNumber);
 
+        uint64_t start = rdtsc_start();
         lob.on_delete_message(&msg);
+        uint64_t elapsed = rdtsc_end() - start;
+        g_histograms[MSG_DELETE].record(elapsed);
         break;
       }
       case 'E': {
@@ -92,7 +149,10 @@ int main() {
         msg.orderRefNumber = bswap64(msg.orderRefNumber);
         msg.executedShares = bswap32(msg.executedShares);
 
+        uint64_t start = rdtsc_start();
         lob.on_execute_message(&msg);
+        uint64_t elapsed = rdtsc_end() - start;
+        g_histograms[MSG_EXECUTE].record(elapsed);
         break;
       }
       case 'X': {
@@ -102,7 +162,10 @@ int main() {
         msg.orderRefNumber = bswap64(msg.orderRefNumber);
         msg.canceledShares = bswap32(msg.canceledShares);
 
+        uint64_t start = rdtsc_start();
         lob.on_cancel_message(&msg);
+        uint64_t elapsed = rdtsc_end() - start;
+        g_histograms[MSG_CANCEL].record(elapsed);
         break;
       }
       case 'U': {
@@ -114,7 +177,10 @@ int main() {
         msg.shares = bswap32(msg.shares);
         msg.price = to_dense_index(bswap32(msg.price));
 
+        uint64_t start = rdtsc_start();
         lob.on_replace_message(&msg);
+        uint64_t elapsed = rdtsc_end() - start;
+        g_histograms[MSG_REPLACE].record(elapsed);
         break;
       }
       }
@@ -128,6 +194,9 @@ int main() {
     }
 
     std::cout << "Replay completed successfully. " << message_count << "\n";
+
+    print_latency_report();
+
   } catch (const std::exception &e) {
     std::cerr << "Fatal Error: " << e.what() << '\n';
     return 1;
