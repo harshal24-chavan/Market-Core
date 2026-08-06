@@ -1,15 +1,26 @@
 #pragma once
 #include <algorithm>
 #include <cstdint>
-#include <limits>
 
 constexpr uint64_t EMPTY_SLOT = 0;
-constexpr uint64_t TOMBSTONE = std::numeric_limits<uint64_t>::max();
 constexpr uint32_t NULL_INDEX = 0xFFFFFFFF;
 
+/*
+ * Implementing Robin hood hashing + backwards shift deletion
+ *
+ * for explanation please visit blog by Emmanuel Goossaert:
+ * https://codecapsule.com/2013/11/11/robin-hood-hashing/
+ *
+ * and another blog:
+ * https://codecapsule.com/2013/11/17/robin-hood-hashing-backward-shift-deletion/
+ */
+
 struct alignas(16) HashEntry {
-  uint64_t key;   // will hold the order reference number
-  uint32_t value; // will hold the slab allocators index
+  uint64_t key;             // will hold the order reference number
+  uint32_t value;           // will hold the slab allocators index
+  uint32_t dib{NULL_INDEX}; // will hold Distance from initial bucket
+
+  inline bool empty() const noexcept { return key == EMPTY_SLOT; }
 };
 
 class OrderMap {
@@ -17,7 +28,7 @@ private:
   uint32_t capacity_mask;
   uint32_t capacity;
   HashEntry *table;
-  uint32_t size_;
+  uint32_t size_{0};
 
 public:
   OrderMap(uint32_t capacity_bits = 21) {
@@ -37,47 +48,94 @@ public:
   }
 
   inline void insert(uint64_t key, uint32_t val) noexcept {
-    uint32_t ind = hash(key);
-
-    uint32_t probe = 1;
-
+    HashEntry currentEntry{key, val, 0};
+    uint32_t hashIndex = hash(key);
     while (true) {
-      probe++;
-      if (table[ind].key == EMPTY_SLOT || table[ind].key == TOMBSTONE) {
-        table[ind].key = key;
-        table[ind].value = val;
-        size_++;
-
+      HashEntry &entry = table[hashIndex];
+      if (entry.empty()) {
+        // bucket empty
+        entry = currentEntry;
         return;
       }
-      ind = (ind + 1) & capacity_mask;
+
+      if (entry.dib < currentEntry.dib) {
+        // swap the bucket
+        std::swap(entry, currentEntry);
+      }
+
+      ++currentEntry.dib;
+      hashIndex = (hashIndex + 1) & capacity_mask;
     }
+    size_++;
   }
 
   inline uint32_t get(uint64_t key) const noexcept {
     uint32_t ind = hash(key);
-    while (table[ind].key != EMPTY_SLOT) {
-      if (table[ind].key == key) {
-        return table[ind].value;
+    uint32_t currentDib = 0;
+
+    while (true) {
+      const HashEntry &entry = table[ind];
+      if (entry.empty()) {
+        return NULL_INDEX;
       }
+      if (entry.dib < currentDib) {
+        return NULL_INDEX;
+      }
+      if (entry.key == key) {
+        return entry.value;
+      }
+
       ind = (ind + 1) & capacity_mask;
+      currentDib++;
     }
+    // will not reach here
     return NULL_INDEX;
   }
 
   inline void erase(uint64_t key) {
-    uint32_t ind = hash(key);
+    uint32_t hashIndex = hash(key);
+    uint32_t currentDib = 0;
 
-    while (table[ind].key != EMPTY_SLOT) {
-      if (table[ind].key == key) {
-        table[ind].key = TOMBSTONE;
-        table[ind].value = 0;
+    while (true) {
+      HashEntry &entry = table[hashIndex];
+
+      if (entry.empty()) {
+        return;
+      }
+
+      if (entry.dib < currentDib) {
+        return;
+      }
+
+      if (entry.key == key) {
+        // we found the entry to delete
+        break;
+      }
+
+      hashIndex = (hashIndex + 1) & capacity_mask;
+      ++currentDib;
+    }
+
+    uint32_t hole = hashIndex;
+    uint32_t next = (hole + 1) & capacity_mask;
+
+    while (true) {
+      HashEntry &nextEntry = table[next];
+      if (nextEntry.empty() || nextEntry.dib == 0) {
+        table[hole].key = EMPTY_SLOT;
+        table[hole].value = EMPTY_SLOT;
+        table[hole].dib = NULL_INDEX;
+
         size_--;
         return;
       }
-      ind = (ind + 1) & capacity_mask;
+
+      table[hole] = nextEntry;
+      table[hole].dib--;
+
+      hole = next;
+      next = (next + 1) & capacity_mask;
     }
-    return;
   }
 
   uint32_t size() { return size_; }
