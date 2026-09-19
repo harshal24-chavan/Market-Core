@@ -1,5 +1,4 @@
 #pragma once
-#include <algorithm>
 #include <cstdint>
 #include <limits>
 
@@ -8,8 +7,9 @@ constexpr uint64_t TOMBSTONE = std::numeric_limits<uint64_t>::max();
 constexpr uint32_t NULL_INDEX = 0xFFFFFFFF;
 
 struct alignas(16) HashEntry {
-  uint64_t key;   // will hold the order reference number
-  uint32_t value; // will hold the slab allocators index
+  uint64_t key;         // will hold the order reference number
+  uint32_t value;       // will hold the slab allocators index
+  uint32_t locate_code; // which stock it belongs to?
 };
 
 class OrderMap {
