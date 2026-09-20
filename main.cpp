@@ -1,24 +1,16 @@
 #include "include/FlatHashTable.hpp"
 #include "include/LatencyHistogram.hpp"
-#include "include/LimitOrderBook.hpp"
+#include "include/MarketManager.hpp"
 #include "include/MmappedFile.hpp"
 #include "include/messages.hpp"
+#include <byteswap.h> // Ensure this is included for bswap_16, bswap_32, bswap_64
+#include <iomanip>
 #include <iostream>
 #include <pthread.h>
 #include <sched.h>
 #include <stdexcept>
 
 static LatencyHistogram g_histograms[MSG_COUNT];
-
-inline uint32_t to_dense_index(uint32_t itch_price) noexcept {
-  // Sub-dollar prices ($0.0000 to $0.9999) keep 0.0001 granularity
-  if (itch_price < 10000) {
-    return itch_price;
-  }
-  // Prices >= $1.00 are scaled to 0.01 granularity (cents)
-  // Offset by 10000 so they seamlessly continue after the sub-dollar range
-  return 10000 + ((itch_price - 10000) / 100);
-}
 
 void pin_thread_to_core(int core_id) {
   cpu_set_t cpuset;
@@ -47,7 +39,7 @@ void print_latency_report(double cpu_ghz = 3.07) {
   std::cout << "\n============================================================="
                "===========================\n";
   std::cout << "                          NASDAQ ITCH 5.0 LATENCY HISTOGRAM    "
-               "                         \n";
+               "                     \n";
   std::cout << "==============================================================="
                "=========================\n";
   std::cout << std::left << std::setw(20) << "Message Type" << std::setw(12)
@@ -88,113 +80,106 @@ void print_latency_report(double cpu_ghz = 3.07) {
 int main() {
   pin_thread_to_core(2);
 
-  // 1. Static Allocation
-  static LimitOrderbook lob;
+  // 1. Initialize the new multi-stock Market Manager
+  MarketManager market;
 
   try {
-    // 2. Map the file directly into virtual memory
+    // 2. Stream the file using MAP_PRIVATE + MADV_SEQUENTIAL (Safe for 12GB RAM
+    // limit)
     MmappedFile file("01302020.NASDAQ_ITCH50.1");
 
     const char *ptr = file.data();
     const char *end = ptr + file.size();
     uint64_t message_count = 0;
+    uint64_t next_report = 100'000;
 
     std::cout << "Starting Deterministic Replay Engine...\n";
 
-    // 3. The mmap traversal loop
-    while (ptr < end) {
-      // ITCH historical files prefix each message with a 2-byte length
-      // We use reinterpret_cast and immediately byte-swap it.
+    // 3. The highly optimized branch-predicted loop
+    while (__builtin_expect(ptr < end, 1)) {
+      // Read the 2-byte message length
       uint16_t msg_length = bswap16(*reinterpret_cast<const uint16_t *>(ptr));
-      ptr += 2; // Move past the length prefix
 
-      if (ptr + msg_length > end)
-        break; // Safety check
+      // Move pointer to the start of the actual message payload
+      const char *msg_ptr = ptr + 2;
+      char msg_type = msg_ptr[0];
 
-      char msg_type = *ptr;
-
-      // 4. Parse, Byte-Swap, and Route
       switch (msg_type) {
       case 'A':
       case 'F': {
-        const auto *raw_msg = reinterpret_cast<const AddOrder *>(ptr);
-        AddOrder msg = *raw_msg; // Copy so we can safely mutate the bytes
+        const auto *msg = reinterpret_cast<const AddOrder *>(msg_ptr);
 
-        msg.orderRefNumber = bswap64(msg.orderRefNumber);
-        msg.shares = bswap32(msg.shares);
-        msg.price = to_dense_index(bswap32(msg.price));
+        // We must bswap the locate code here to route it to the correct stock
+        // array index
+        uint16_t locate = bswap16(msg->stockLocate);
 
         uint64_t start = rdtsc_start();
-        lob.on_add_message(&msg);
+        market.process_add(
+            msg, locate); // Manager handles remaining bswaps internally
         uint64_t elapsed = rdtsc_end() - start;
         g_histograms[MSG_ADD].record(elapsed);
         break;
       }
       case 'D': {
-        const auto *raw_msg = reinterpret_cast<const OrderDelete *>(ptr);
-        OrderDelete msg = *raw_msg;
-
-        msg.orderRefNumber = bswap64(msg.orderRefNumber);
+        const auto *msg = reinterpret_cast<const OrderDelete *>(msg_ptr);
+        uint64_t order_id = bswap64(msg->orderRefNumber);
 
         uint64_t start = rdtsc_start();
-        lob.on_delete_message(&msg);
+        market.process_delete(order_id);
         uint64_t elapsed = rdtsc_end() - start;
         g_histograms[MSG_DELETE].record(elapsed);
         break;
       }
-      case 'E': {
-        const auto *raw_msg = reinterpret_cast<const OrderExecuted *>(ptr);
-        OrderExecuted msg = *raw_msg;
-
-        msg.orderRefNumber = bswap64(msg.orderRefNumber);
-        msg.executedShares = bswap32(msg.executedShares);
+      case 'E':
+      case 'C': { // Treat 'C' (Execute with Price) exactly like 'E' for LOB
+                  // state
+        // Both structs have orderRefNumber and executedShares at the exact same
+        // offsets
+        const auto *msg = reinterpret_cast<const OrderExecuted *>(msg_ptr);
+        uint64_t order_id = bswap64(msg->orderRefNumber);
+        uint32_t shares = bswap32(msg->executedShares);
 
         uint64_t start = rdtsc_start();
-        lob.on_execute_message(&msg);
+        market.process_execute(order_id, shares);
         uint64_t elapsed = rdtsc_end() - start;
         g_histograms[MSG_EXECUTE].record(elapsed);
         break;
       }
       case 'X': {
-        const auto *raw_msg = reinterpret_cast<const OrderCancel *>(ptr);
-        OrderCancel msg = *raw_msg;
-
-        msg.orderRefNumber = bswap64(msg.orderRefNumber);
-        msg.canceledShares = bswap32(msg.canceledShares);
+        const auto *msg = reinterpret_cast<const OrderCancel *>(msg_ptr);
+        uint64_t order_id = bswap64(msg->orderRefNumber);
+        uint32_t canceled_shares = bswap32(msg->canceledShares);
 
         uint64_t start = rdtsc_start();
-        lob.on_cancel_message(&msg);
+        market.process_cancel(order_id, canceled_shares);
         uint64_t elapsed = rdtsc_end() - start;
         g_histograms[MSG_CANCEL].record(elapsed);
         break;
       }
       case 'U': {
-        const auto *raw_msg = reinterpret_cast<const OrderReplace *>(ptr);
-        OrderReplace msg = *raw_msg;
-
-        msg.originalOrderRefNumber = bswap64(msg.originalOrderRefNumber);
-        msg.newOrderRefNumber = bswap64(msg.newOrderRefNumber);
-        msg.shares = bswap32(msg.shares);
-        msg.price = to_dense_index(bswap32(msg.price));
+        const auto *msg = reinterpret_cast<const OrderReplace *>(msg_ptr);
 
         uint64_t start = rdtsc_start();
-        lob.on_replace_message(&msg);
+        market.process_replace(msg); // Manager handles bswaps internally
         uint64_t elapsed = rdtsc_end() - start;
         g_histograms[MSG_REPLACE].record(elapsed);
         break;
       }
       }
 
-      // 5. The Crucible - Assert mathematical perfection
-      // lob.validate_invariants();
-
-      // Advance the pointer to the next message
-      ptr += msg_length;
+      // 4. Advance pointer exactly to the next message chunk
+      ptr += 2 + msg_length;
       message_count++;
+
+      if (message_count == next_report) {
+        std::cout << "Completed " << message_count << " messages\n";
+        next_report += 100'000;
+        std::cout << "drop count: " << drop_count << "\n";
+      }
     }
 
-    std::cout << "Replay completed successfully. " << message_count << "\n";
-
+    std::cout << "Replay completed successfully. Total Messages: "
+              << message_count << "\n";
     print_latency_report();
 
   } catch (const std::exception &e) {

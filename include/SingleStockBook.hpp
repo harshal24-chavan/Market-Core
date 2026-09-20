@@ -84,9 +84,11 @@ private:
   }
 
 public:
-  void add_order(uint32_t order_index, uint32_t price, uint32_t shares,
-                 uint8_t side, SlabAllocator<Order> &order_pool,
-                 PageAllocator &page_alloc) noexcept {
+  inline void add_order(uint32_t order_index, uint32_t price, uint32_t shares,
+                        uint8_t side, SlabAllocator<Order> &order_pool,
+                        PageAllocator &page_alloc) noexcept {
+    assert(price < 2097152 && "FATAL: Dense price exceeds Array/Tree bounds!");
+
     Order &order = order_pool.get(order_index);
     order.shares = shares;
     order.price_and_side = (price << 1) + side;
@@ -97,8 +99,8 @@ public:
     append_order(level, order_index, order, order_pool);
   }
 
-  void cancel_order(uint32_t order_index, SlabAllocator<Order> &pool,
-                    PageAllocator &page_alloc) {
+  inline void cancel_order(uint32_t order_index, SlabAllocator<Order> &pool,
+                           PageAllocator &page_alloc) {
     Order &order = pool.get(order_index);
     uint32_t price = order.price_and_side >> 1;
     uint8_t side = order.price_and_side & 1;
@@ -110,8 +112,9 @@ public:
     pool.free(order_index);
   }
 
-  void execute_order(uint32_t order_index, uint32_t executed_shares,
-                     SlabAllocator<Order> &pool, PageAllocator &page_alloc) {
+  inline bool execute_order(uint32_t order_index, uint32_t executed_shares,
+                            SlabAllocator<Order> &pool,
+                            PageAllocator &page_alloc) {
     Order &order = pool.get(order_index);
     uint32_t price = order.price_and_side >> 1;
     uint8_t side = order.price_and_side & 1;
@@ -119,12 +122,45 @@ public:
     PriceLevel &level = side == BUY ? bid_levels.get_level(price, page_alloc)
                                     : ask_levels.get_level(price, page_alloc);
 
+    if (__builtin_expect(executed_shares >= order.shares, 0)) {
+      executed_shares = order.shares;
+    }
+
     order.shares -= executed_shares;
     level.total_volume -= executed_shares;
 
     if (order.shares == 0) {
       remove_order(level, order_index, order, pool);
       pool.free(order_index);
+      return true;
     }
+
+    return false;
+  }
+
+  inline bool partial_cancel_order(uint32_t order_index,
+                                   uint32_t canceled_shares,
+                                   SlabAllocator<Order> &pool,
+                                   PageAllocator &page_alloc) noexcept {
+
+    Order &order = pool.get(order_index);
+    if (__builtin_expect(canceled_shares >= order.shares, 0)) {
+      canceled_shares = order.shares;
+    }
+
+    if (canceled_shares >= order.shares) {
+      cancel_order(order_index, pool, page_alloc);
+      return true;
+    }
+
+    uint32_t price = order.price_and_side >> 1;
+    uint8_t side = order.price_and_side & 1;
+
+    PriceLevel &level = side == BUY ? bid_levels.get_level(price, page_alloc)
+                                    : ask_levels.get_level(price, page_alloc);
+
+    order.shares -= canceled_shares;
+    level.total_volume -= canceled_shares;
+    return false;
   }
 };

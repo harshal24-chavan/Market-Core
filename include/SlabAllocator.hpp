@@ -7,7 +7,7 @@
 #include <iostream>
 #include <sys/mman.h>
 
-template <typename T, uint32_t SLAB_BITS = 20> class SlabAllocator {
+template <typename T, uint32_t SLAB_BITS = 28> class SlabAllocator {
 private:
   static constexpr uint32_t SLAB_SIZE = 1U << SLAB_BITS;
   static constexpr uint32_t SLAB_MASK = SLAB_SIZE - 1;
