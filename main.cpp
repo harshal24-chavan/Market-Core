@@ -83,6 +83,7 @@ int main() {
   // 1. Initialize the new multi-stock Market Manager
   MarketManager market;
 
+  uint32_t dCount = 0;
   try {
     // 2. Stream the file using MAP_PRIVATE + MADV_SEQUENTIAL (Safe for 12GB RAM
     // limit)
@@ -121,6 +122,7 @@ int main() {
         break;
       }
       case 'D': {
+        dCount++;
         const auto *msg = reinterpret_cast<const OrderDelete *>(msg_ptr);
         uint64_t order_id = bswap64(msg->orderRefNumber);
 
@@ -175,6 +177,8 @@ int main() {
         std::cout << "Completed " << message_count << " messages\n";
         next_report += 100'000;
         std::cout << "drop count: " << drop_count << "\n";
+        std::cout << "delete count: " << dCount
+                  << " -> erase called: " << deleteCount << "\n";
       }
     }
 

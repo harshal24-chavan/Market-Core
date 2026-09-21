@@ -42,13 +42,15 @@ public:
 
     uint32_t order_index = global_pool.allocate();
     if (order_index == NULL_INDEX) {
-      assert(false, "cannot add, map full.");
+      assert(false && "cannot add, map full.");
     }
 
-    global_map.insert(msg->orderRefNumber, order_index, locate_code);
+    uint64_t order_id = bswap64(msg->orderRefNumber);
+    uint32_t shares = bswap32(msg->shares);
+    global_map.insert(order_id, order_index, locate_code);
 
-    stock_books[locate_code].add_order(order_index, dense_price, msg->shares,
-                                       side, global_pool, global_pages);
+    stock_books[locate_code].add_order(order_index, dense_price, shares, side,
+                                       global_pool, global_pages);
   }
 
   void process_delete(uint64_t order_id) noexcept {
@@ -103,7 +105,7 @@ public:
   void process_replace(const OrderReplace *msg) noexcept {
     uint64_t old_id = bswap64(msg->originalOrderRefNumber);
 
-    auto *slot = global_map.get(msg->originalOrderRefNumber);
+    auto *slot = global_map.get(old_id);
     if (!slot) {
       return;
     }

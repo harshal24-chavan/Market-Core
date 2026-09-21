@@ -144,7 +144,7 @@ public:
                                    PageAllocator &page_alloc) noexcept {
 
     Order &order = pool.get(order_index);
-    if (__builtin_expect(canceled_shares >= order.shares, 0)) {
+    if (__builtin_expect(canceled_shares > order.shares, 0)) {
       canceled_shares = order.shares;
     }
 

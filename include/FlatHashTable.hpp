@@ -9,6 +9,9 @@ constexpr uint64_t EMPTY_SLOT = 0;
 constexpr uint32_t NULL_INDEX = 0xFFFFFFFF;
 constexpr uint32_t MAX_PROBES = 12000;
 
+uint64_t deleteCount{0};
+uint64_t actualDeleteCount{0};
+
 struct alignas(16) HashEntry {
   uint64_t key;
   uint32_t value;
@@ -23,8 +26,6 @@ private:
   uint32_t size_{0};
 
 public:
-  // We can safely drop this back to 25 bits (~33.5 million slots)
-  // This takes just 536 MB of RAM!
   OrderMap(uint32_t capacity_bits = 27) {
     capacity = 1 << capacity_bits;
     capacity_mask = capacity - 1;
@@ -46,7 +47,6 @@ public:
     uint32_t probes = 0;
 
     while (true) {
-      // No more TOMBSTONES! We just look for EMPTY_SLOT
       if (table[ind].key == EMPTY_SLOT) {
         table[ind].key = key;
         table[ind].value = val;
@@ -97,13 +97,15 @@ public:
     uint32_t i = hash(key);
     uint32_t probes = 0;
 
+    deleteCount++;
+
     while (table[i].key != EMPTY_SLOT) {
       if (table[i].key == key) {
-        // 1. Create the hole
+        // Create the hole
         table[i].key = EMPTY_SLOT;
         size_--;
 
-        // 2. The Backward Shift (Defragmentation)
+        // Backward Shift
         uint32_t j = i;
         while (true) {
           j = (j + 1) & capacity_mask;
@@ -127,6 +129,7 @@ public:
             i = j; // The hole has now moved to j
           }
         }
+        actualDeleteCount++;
         return;
       }
       i = (i + 1) & capacity_mask;
