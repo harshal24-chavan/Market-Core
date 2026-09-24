@@ -1,5 +1,6 @@
 #pragma once
 
+#include "BitmaskTree.hpp"
 #include "FlatHashTable.hpp"
 #include "Order.hpp"
 #include "PageAllocator.hpp"
@@ -20,13 +21,17 @@ inline uint32_t to_dense_index(uint32_t itch_price) noexcept {
 }
 
 std::atomic<uint64_t> drop_count{0};
+std::uint32_t PRICE_LIMIT = 2097152;
 
 class MarketManager {
 private:
+  using TreeAllocator = SlabAllocator<BitmaskTree, 15>;
+
   SlabAllocator<Order> global_pool;
   OrderMap global_map;
   PageAllocator global_pages;
   SingleStockBook stock_books[10000];
+  TreeAllocator global_trees;
 
 public:
   void process_add(const AddOrder *msg, uint16_t locate_code) noexcept {
@@ -35,7 +40,7 @@ public:
     uint8_t side = (msg->buySellIndicator == 'B') ? 0 : 1;
 
     // Graceful drop instead of assert
-    if (__builtin_expect(price >= 1048576, 0)) {
+    if (__builtin_expect(dense_price >= PRICE_LIMIT, 0)) {
       drop_count++;
       return;
     }
@@ -50,7 +55,7 @@ public:
     global_map.insert(order_id, order_index, locate_code);
 
     stock_books[locate_code].add_order(order_index, dense_price, shares, side,
-                                       global_pool, global_pages);
+                                       global_pool, global_pages, global_trees);
   }
 
   void process_delete(uint64_t order_id) noexcept {
@@ -63,7 +68,7 @@ public:
 
     __builtin_prefetch(&global_pool.get(order_index), 1, 3);
     stock_books[locate_code].cancel_order(order_index, global_pool,
-                                          global_pages);
+                                          global_pages, global_trees);
 
     global_map.erase(order_id);
   }
@@ -80,7 +85,7 @@ public:
     assert(order_index != NULL_INDEX &&
            "FATAL: Hash Table returned a dead slab index!");
     bool isDead = stock_books[locate_code].execute_order(
-        order_index, executed_shares, global_pool, global_pages);
+        order_index, executed_shares, global_pool, global_pages, global_trees);
 
     if (isDead)
       global_map.erase(order_id);
@@ -96,7 +101,7 @@ public:
     uint32_t locate_code = slot->locate_code;
 
     bool isDead = stock_books[locate_code].partial_cancel_order(
-        order_index, canceled_shares, global_pool, global_pages);
+        order_index, canceled_shares, global_pool, global_pages, global_trees);
 
     if (isDead)
       global_map.erase(order_id);
@@ -117,7 +122,7 @@ public:
     uint8_t side = order.price_and_side & 1;
 
     stock_books[locate_code].cancel_order(order_index, global_pool,
-                                          global_pages);
+                                          global_pages, global_trees);
     global_map.erase(old_id);
 
     uint64_t new_id = bswap64(msg->newOrderRefNumber);
@@ -131,11 +136,11 @@ public:
     uint32_t dense_price = to_dense_index(new_price);
 
     // TEMP FIX: update to use flatmap later
-    if (__builtin_expect(dense_price >= 1048576, 0)) {
+    if (__builtin_expect(dense_price >= PRICE_LIMIT, 0)) {
       drop_count++;
       return;
     }
     stock_books[locate_code].add_order(new_index, dense_price, new_shares, side,
-                                       global_pool, global_pages);
+                                       global_pool, global_pages, global_trees);
   }
 };

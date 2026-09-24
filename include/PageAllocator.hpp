@@ -20,7 +20,7 @@ public:
   explicit PageAllocator(uint32_t max_pages = 50000) {
     size_t bytes = max_pages * 4096 * sizeof(PriceLevel);
 
-    // Allocate anonymously. Use huge pages if available.
+    // Allocate anonymously. Use huge pages
     memory_pool =
         static_cast<PriceLevel *>(::mmap(nullptr, bytes, PROT_READ | PROT_WRITE,
                                          MAP_PRIVATE | MAP_ANONYMOUS, -1, 0));
@@ -29,7 +29,14 @@ public:
       throw std::runtime_error("Page Allocator OOM");
 
     ::madvise(memory_pool, bytes, MADV_HUGEPAGE);
-    std::memset(memory_pool, 0, bytes); // Pre-fault physical memory
+
+    size_t total_elements = max_pages * 4096;
+    for (size_t i = 0; i < total_elements; ++i) {
+      memory_pool[i].head_index = NULL_INDEX;
+      memory_pool[i].tail_index = NULL_INDEX;
+      memory_pool[i].total_volume = 0;
+      memory_pool[i].order_count = 0;
+    }
   }
 
   inline PriceLevel *allocate_page() noexcept {

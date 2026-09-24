@@ -26,7 +26,7 @@ private:
   uint32_t size_{0};
 
 public:
-  OrderMap(uint32_t capacity_bits = 27) {
+  OrderMap(uint32_t capacity_bits = 25) {
     capacity = 1 << capacity_bits;
     capacity_mask = capacity - 1;
     table = new HashEntry[capacity]();

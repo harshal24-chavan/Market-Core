@@ -175,7 +175,7 @@ int main() {
 
       if (message_count == next_report) {
         std::cout << "Completed " << message_count << " messages\n";
-        next_report += 100'000;
+        next_report += 1'000'000;
         std::cout << "drop count: " << drop_count << "\n";
         std::cout << "delete count: " << dCount
                   << " -> erase called: " << deleteCount << "\n";

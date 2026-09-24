@@ -2,24 +2,28 @@
 
 #include "BitmaskTree.hpp"
 #include "FlatHashTable.hpp"
+#include "MarketManager.hpp"
 #include "Order.hpp"
 #include "PageAllocator.hpp"
+#include "PagedBitmaskTree.hpp"
 #include "SlabAllocator.hpp"
 
 class SingleStockBook {
 private:
+  using TreeAllocator = SlabAllocator<BitmaskTree, 15>;
+
   PagedPriceArray bid_levels;
   PagedPriceArray ask_levels;
 
-  BitmaskTree bid_tree;
-  BitmaskTree ask_tree;
+  PagedBitmaskTree bid_tree;
+  PagedBitmaskTree ask_tree;
 
   static constexpr uint8_t BUY = 0;
   static constexpr uint8_t ASK = 1;
 
   inline void append_order(PriceLevel &level, uint32_t order_index,
-                           Order &newOrder,
-                           SlabAllocator<Order> &pool) noexcept {
+                           Order &newOrder, SlabAllocator<Order> &pool,
+                           TreeAllocator &tree_alloc) noexcept {
     if (level.head_index == NULL_INDEX) {
       // setting the price levels (intrusive list)
       level.head_index = order_index;
@@ -33,9 +37,9 @@ private:
       uint8_t side = newOrder.price_and_side & 1;
 
       if (side == BUY)
-        bid_tree.set_active(price);
+        bid_tree.setActive(price, tree_alloc);
       else
-        ask_tree.set_active(price);
+        ask_tree.setActive(price, tree_alloc);
     } else {
       // orders already  present
       Order &oldTail = pool.get(level.tail_index);
@@ -52,7 +56,8 @@ private:
   }
 
   inline void remove_order(PriceLevel &level, uint32_t order_index,
-                           Order &order, SlabAllocator<Order> &pool) noexcept {
+                           Order &order, SlabAllocator<Order> &pool,
+                           TreeAllocator &tree_alloc) noexcept {
 
     if (order.prev_index != NULL_INDEX) {
       pool.get(order.prev_index).next_index = order.next_index;
@@ -74,9 +79,9 @@ private:
       uint8_t side = order.price_and_side & 1;
 
       if (side == BUY)
-        bid_tree.clear_active(price);
+        bid_tree.clearActive(price, tree_alloc);
       else
-        ask_tree.clear_active(price);
+        ask_tree.clearActive(price, tree_alloc);
     }
 
     order.next_index = NULL_INDEX;
@@ -86,8 +91,10 @@ private:
 public:
   inline void add_order(uint32_t order_index, uint32_t price, uint32_t shares,
                         uint8_t side, SlabAllocator<Order> &order_pool,
-                        PageAllocator &page_alloc) noexcept {
-    assert(price < 2097152 && "FATAL: Dense price exceeds Array/Tree bounds!");
+                        PageAllocator &page_alloc,
+                        TreeAllocator &tree_alloc) noexcept {
+    // assert(price < PRICE_LIMIT &&
+    //"FATAL: Dense price exceeds Array/Tree bounds!");
 
     Order &order = order_pool.get(order_index);
     order.shares = shares;
@@ -96,11 +103,12 @@ public:
     PriceLevel &level = (side == BUY) ? bid_levels.get_level(price, page_alloc)
                                       : ask_levels.get_level(price, page_alloc);
 
-    append_order(level, order_index, order, order_pool);
+    append_order(level, order_index, order, order_pool, tree_alloc);
   }
 
   inline void cancel_order(uint32_t order_index, SlabAllocator<Order> &pool,
-                           PageAllocator &page_alloc) {
+                           PageAllocator &page_alloc,
+                           TreeAllocator &tree_alloc) {
     Order &order = pool.get(order_index);
     uint32_t price = order.price_and_side >> 1;
     uint8_t side = order.price_and_side & 1;
@@ -108,13 +116,14 @@ public:
     PriceLevel &level = side == BUY ? bid_levels.get_level(price, page_alloc)
                                     : ask_levels.get_level(price, page_alloc);
 
-    remove_order(level, order_index, order, pool);
+    remove_order(level, order_index, order, pool, tree_alloc);
     pool.free(order_index);
   }
 
   inline bool execute_order(uint32_t order_index, uint32_t executed_shares,
                             SlabAllocator<Order> &pool,
-                            PageAllocator &page_alloc) {
+                            PageAllocator &page_alloc,
+                            TreeAllocator &tree_alloc) {
     Order &order = pool.get(order_index);
     uint32_t price = order.price_and_side >> 1;
     uint8_t side = order.price_and_side & 1;
@@ -130,7 +139,7 @@ public:
     level.total_volume -= executed_shares;
 
     if (order.shares == 0) {
-      remove_order(level, order_index, order, pool);
+      remove_order(level, order_index, order, pool, tree_alloc);
       pool.free(order_index);
       return true;
     }
@@ -141,7 +150,8 @@ public:
   inline bool partial_cancel_order(uint32_t order_index,
                                    uint32_t canceled_shares,
                                    SlabAllocator<Order> &pool,
-                                   PageAllocator &page_alloc) noexcept {
+                                   PageAllocator &page_alloc,
+                                   TreeAllocator &tree_alloc) noexcept {
 
     Order &order = pool.get(order_index);
     if (__builtin_expect(canceled_shares > order.shares, 0)) {
@@ -149,7 +159,7 @@ public:
     }
 
     if (canceled_shares >= order.shares) {
-      cancel_order(order_index, pool, page_alloc);
+      cancel_order(order_index, pool, page_alloc, tree_alloc);
       return true;
     }
 
