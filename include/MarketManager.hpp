@@ -4,6 +4,7 @@
 #include "FlatHashTable.hpp"
 #include "Order.hpp"
 #include "PageAllocator.hpp"
+#include "SIMDOrderMap.hpp"
 #include "SingleStockBook.hpp"
 #include "SlabAllocator.hpp"
 #include "messages.hpp"
@@ -28,7 +29,8 @@ private:
   using TreeAllocator = SlabAllocator<BitmaskTree, 15>;
 
   SlabAllocator<Order> global_pool;
-  OrderMap global_map;
+  // OrderMap global_map;
+  SIMDOrderMap global_map;
   PageAllocator global_pages;
   SingleStockBook stock_books[10000];
   TreeAllocator global_trees;
