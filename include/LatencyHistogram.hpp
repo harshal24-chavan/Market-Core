@@ -16,7 +16,7 @@ enum MessageTypeIdx : size_t {
 };
 
 struct LatencyHistogram {
-  static constexpr uint64_t MAX_DIRECT_CYCLES = 2048;
+  static constexpr uint64_t MAX_DIRECT_CYCLES = 32768;
 
   // Direct buckets for 0-2047 cycles + 128 logarithmic overflow buckets
   std::array<uint64_t, MAX_DIRECT_CYCLES> direct_buckets{};

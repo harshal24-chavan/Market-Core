@@ -29,13 +29,17 @@ private:
   using TreeAllocator = SlabAllocator<BitmaskTree, 15>;
 
   SlabAllocator<Order> global_pool;
-  // OrderMap global_map;
-  SIMDOrderMap global_map;
+  OrderMap global_map;
+  // SIMDOrderMap global_map;
   PageAllocator global_pages;
   SingleStockBook stock_books[10000];
   TreeAllocator global_trees;
 
 public:
+  inline void prefetch_order(uint64_t order_id) const noexcept {
+    global_map.prefetch(order_id);
+  }
+
   void process_add(const AddOrder *msg, uint16_t locate_code) noexcept {
     uint32_t price = bswap32(msg->price);
     uint32_t dense_price = to_dense_index(price);
