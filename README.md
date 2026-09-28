@@ -1,8 +1,8 @@
 ![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
 
-# ⚡ Deterministic Sub-Microsecond NASDAQ ITCH 5.0 Limit Order Book Replay Engine
+# ⚡ Deterministic NASDAQ ITCH 5.0 Limit Order Book Replay Engine
 
-An ultra-low-latency, zero-allocation C++20 trading engine engineered to replay NASDAQ ITCH 5.0 market data at **7.14 million messages per second** with **nanosecond-scale tail latency** (**138 ns median Add**, **53 ns median Cancel**, **<620 ns p99.9**).
+An ultra-low-latency, zero-allocation C++20 trading engine engineered to replay NASDAQ ITCH 5.0 market data at **5.51 million messages per second** with **nanosecond-scale tail latency** (**141 ns median Add**, **113 ns median Cancel**, **<1.5us p99**).
 
 ---
 
