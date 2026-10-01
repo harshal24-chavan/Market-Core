@@ -37,8 +37,8 @@ public:
                        0); // 0 = read, 0 = low temporal locality
   }
 
-  OrderMap(uint32_t capacity_bits = 25) {
-    capacity = 1 << capacity_bits;
+  OrderMap(uint32_t capacity_bits = 22) {
+    capacity = 1ULL << capacity_bits;
     capacity_mask = capacity - 1;
 
     bytes = capacity * sizeof(HashEntry);
@@ -123,73 +123,74 @@ public:
     return nullptr;
   }
 
-  //  inline void erase(uint64_t key) noexcept {
-  //    uint32_t i = hash(key);
-  //    uint32_t probes = 0;
-  //
-  //    deleteCount++;
-  //
-  //    while (table[i].key != EMPTY_SLOT) {
-  //      if (table[i].key == key) {
-  //        // Create the hole
-  //        table[i].key = EMPTY_SLOT;
-  //        size_--;
-  //
-  //        // Backward Shift
-  //        uint32_t j = i;
-  //        while (true) {
-  //          j = (j + 1) & capacity_mask;
-  //
-  //          // If we hit an empty slot, the collision cluster is over.
-  //          if (table[j].key == EMPTY_SLOT) {
-  //            break;
-  //          }
-  //
-  //          // Where does the element at j ACTUALLY want to be?
-  //          uint32_t ideal_bucket = hash(table[j].key);
-  //
-  //          // Is the hole 'i' on the natural probe path between ideal_bucket
-  //          and
-  //          // 'j'? By using unsigned arithmetic & mask, this perfectly
-  //          handles
-  //          // array wrap-around!
-  //          if (((i - ideal_bucket) & capacity_mask) <
-  //              ((j - ideal_bucket) & capacity_mask)) {
-  //            // Move the element backward into the hole
-  //            table[i] = table[j];
-  //            table[j].key = EMPTY_SLOT;
-  //            i = j; // The hole has now moved to j
-  //          }
-  //        }
-  //        actualDeleteCount++;
-  //        return;
-  //      }
-  //      i = (i + 1) & capacity_mask;
-  //
-  //      if (__builtin_expect(++probes > MAX_PROBES, 0)) {
-  //        fprintf(stderr,
-  //                "\nFATAL: Hit MAX_PROBES erase! Table Size: %u (%.1f%%
-  //                full)\n", size_, (float)size_ / capacity * 100.0f);
-  //        exit(1);
-  //      }
-  //    }
-  //  }
-
   inline void erase(uint64_t key) noexcept {
-    uint64_t pos = hash(key) & capacity_mask;
+    uint32_t i = hash(key);
+    uint32_t probes = 0;
 
-    while (true) {
-      if (table[pos].key == key) {
-        table[pos].key = DELETED_SLOT;
+    deleteCount++;
+
+    while (table[i].key != EMPTY_SLOT) {
+      if (table[i].key == key) {
+        // Create the hole
+        table[i].key = EMPTY_SLOT;
         size_--;
+
+        // Backward Shift
+        uint32_t j = i;
+        while (true) {
+          j = (j + 1) & capacity_mask;
+
+          // If we hit an empty slot, the collision cluster is over.
+          if (table[j].key == EMPTY_SLOT) {
+            break;
+          }
+
+          // Where does the element at j ACTUALLY want to be?
+          uint32_t ideal_bucket = hash(table[j].key);
+
+          // Is the hole 'i' on the natural probe path between ideal_bucket
+          // and
+          // 'j'? By using unsigned arithmetic & mask, this perfectly
+          // handles
+          // array wrap-around!
+
+          if (((i - ideal_bucket) & capacity_mask) <
+              ((j - ideal_bucket) & capacity_mask)) {
+            // Move the element backward into the hole
+            table[i] = table[j];
+            table[j].key = EMPTY_SLOT;
+            i = j; // The hole has now moved to j
+          }
+        }
+        actualDeleteCount++;
         return;
       }
-      if (table[pos].key == EMPTY_SLOT) {
-        return; // Not found
+      i = (i + 1) & capacity_mask;
+
+      if (__builtin_expect(++probes > MAX_PROBES, 0)) {
+        fprintf(stderr,
+                "\nFATAL: Hit MAX_PROBES erase! Table Size: %u (%.1f%%full)\n ",
+                size_, (float)size_ / capacity * 100.0f);
+        exit(1);
       }
-      pos = (pos + 1) & capacity_mask;
     }
   }
+
+  // inline void erase(uint64_t key) noexcept {
+  //   uint64_t pos = hash(key) & capacity_mask;
+
+  //  while (true) {
+  //    if (table[pos].key == key) {
+  //      table[pos].key = DELETED_SLOT;
+  //      size_--;
+  //      return;
+  //    }
+  //    if (table[pos].key == EMPTY_SLOT) {
+  //      return; // Not found
+  //    }
+  //    pos = (pos + 1) & capacity_mask;
+  //  }
+  //}
 
   uint32_t size() const { return size_; }
 };
