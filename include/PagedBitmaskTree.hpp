@@ -60,8 +60,8 @@ public:
     }
 
     uint32_t best_chunk_index = __builtin_ctzll(active_chunk);
-    BitmaskTree &tree = tree_alloc.get(best_chunk_index);
-    uint32_t local_best = tree.get_best_bid();
+    BitmaskTree &tree = tree_alloc.get(slots[best_chunk_index]);
+    uint32_t local_best = tree.get_best_ask();
 
     return (best_chunk_index << 18) | local_best;
   }

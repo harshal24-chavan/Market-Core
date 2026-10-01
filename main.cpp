@@ -105,6 +105,27 @@ int main() {
       const char *msg_ptr = ptr + 2;
       char msg_type = msg_ptr[0];
 
+      const char *next_ptr = ptr + 2 + msg_length;
+
+      // Ensure we don't read past the end of the file
+      if (__builtin_expect(next_ptr + 21 <= end, 1)) {
+        // next_ptr[0,1] is length. next_ptr[2] is the msg_type.
+        char next_type = next_ptr[2];
+
+        // If the next message uses an Order Reference Number...
+        if (next_type == 'A' || next_type == 'F' || next_type == 'D' ||
+            next_type == 'E' || next_type == 'C' || next_type == 'X' ||
+            next_type == 'U') {
+
+          // Jump exactly 11 bytes into the payload to grab the future Order ID
+          uint64_t future_id =
+              bswap64(*reinterpret_cast<const uint64_t *>(next_ptr + 2 + 11));
+
+          // Tell RAM to fetch this Hash Table slot in the background NOW!
+          market.prefetch_order(future_id);
+        }
+      }
+
       switch (msg_type) {
       case 'A':
       case 'F': {
@@ -122,7 +143,6 @@ int main() {
         break;
       }
       case 'D': {
-        dCount++;
         const auto *msg = reinterpret_cast<const OrderDelete *>(msg_ptr);
         uint64_t order_id = bswap64(msg->orderRefNumber);
 
@@ -176,9 +196,6 @@ int main() {
       if (message_count == next_report) {
         std::cout << "Completed " << message_count << " messages\n";
         next_report += 1'000'000;
-        std::cout << "drop count: " << drop_count << "\n";
-        std::cout << "delete count: " << dCount
-                  << " -> erase called: " << deleteCount << "\n";
       }
     }
 

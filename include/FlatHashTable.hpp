@@ -3,9 +3,11 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <sys/mman.h>
 #include <vector>
 
 constexpr uint64_t EMPTY_SLOT = 0;
+constexpr uint64_t DELETED_SLOT = 0xFFFFFFFFFFFFFFFFULL; // Max uint64
 constexpr uint32_t NULL_INDEX = 0xFFFFFFFF;
 constexpr uint32_t MAX_PROBES = 12000;
 
@@ -25,14 +27,42 @@ private:
   HashEntry *table;
   uint32_t size_{0};
 
+  size_t bytes{0};
+  bool using_hugepages{false};
+
 public:
-  OrderMap(uint32_t capacity_bits = 25) {
-    capacity = 1 << capacity_bits;
-    capacity_mask = capacity - 1;
-    table = new HashEntry[capacity]();
+  inline void prefetch(uint64_t key) const noexcept {
+    uint64_t pos = hash(key) & capacity_mask;
+    __builtin_prefetch(&table[pos], 0,
+                       0); // 0 = read, 0 = low temporal locality
   }
 
-  ~OrderMap() { delete[] table; }
+  OrderMap(uint32_t capacity_bits = 22) {
+    capacity = 1ULL << capacity_bits;
+    capacity_mask = capacity - 1;
+
+    bytes = capacity * sizeof(HashEntry);
+    table = (HashEntry *)mmap(
+        NULL, bytes, PROT_READ | PROT_WRITE,
+        MAP_ANONYMOUS | MAP_PRIVATE | MAP_HUGETLB | MAP_POPULATE, -1, 0);
+
+    if (table != MAP_FAILED) {
+      using_hugepages = true;
+      printf("SUCCESS: HugePages allocated!\n");
+    } else {
+      table = new HashEntry[capacity]();
+      using_hugepages = false;
+      printf("FAILED: Linux denied HugePages. Falling back to 4KB pages.\n");
+    }
+  }
+
+  ~OrderMap() {
+    if (using_hugepages) {
+      munmap(table, bytes);
+    } else {
+      delete[] table;
+    }
+  }
 
   inline uint32_t hash(uint64_t key) const noexcept {
     key ^= key >> 33;
@@ -47,7 +77,7 @@ public:
     uint32_t probes = 0;
 
     while (true) {
-      if (table[ind].key == EMPTY_SLOT) {
+      if (table[ind].key == EMPTY_SLOT || table[ind].key == DELETED_SLOT) {
         table[ind].key = key;
         table[ind].value = val;
         table[ind].locate_code = stock_locate;
@@ -118,9 +148,12 @@ public:
           // Where does the element at j ACTUALLY want to be?
           uint32_t ideal_bucket = hash(table[j].key);
 
-          // Is the hole 'i' on the natural probe path between ideal_bucket and
-          // 'j'? By using unsigned arithmetic & mask, this perfectly handles
+          // Is the hole 'i' on the natural probe path between ideal_bucket
+          // and
+          // 'j'? By using unsigned arithmetic & mask, this perfectly
+          // handles
           // array wrap-around!
+
           if (((i - ideal_bucket) & capacity_mask) <
               ((j - ideal_bucket) & capacity_mask)) {
             // Move the element backward into the hole
@@ -136,12 +169,28 @@ public:
 
       if (__builtin_expect(++probes > MAX_PROBES, 0)) {
         fprintf(stderr,
-                "\nFATAL: Hit MAX_PROBES erase! Table Size: %u (%.1f%% full)\n",
+                "\nFATAL: Hit MAX_PROBES erase! Table Size: %u (%.1f%%full)\n ",
                 size_, (float)size_ / capacity * 100.0f);
         exit(1);
       }
     }
   }
+
+  // inline void erase(uint64_t key) noexcept {
+  //   uint64_t pos = hash(key) & capacity_mask;
+
+  //  while (true) {
+  //    if (table[pos].key == key) {
+  //      table[pos].key = DELETED_SLOT;
+  //      size_--;
+  //      return;
+  //    }
+  //    if (table[pos].key == EMPTY_SLOT) {
+  //      return; // Not found
+  //    }
+  //    pos = (pos + 1) & capacity_mask;
+  //  }
+  //}
 
   uint32_t size() const { return size_; }
 };

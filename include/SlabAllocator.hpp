@@ -5,13 +5,15 @@
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
+#include <stdexcept>
 #include <sys/mman.h>
 
-template <typename T, uint32_t SLAB_BITS = 28> class SlabAllocator {
+template <typename T, uint32_t SLAB_BITS = 22> class SlabAllocator {
 private:
   static constexpr uint32_t SLAB_SIZE = 1U << SLAB_BITS;
   static constexpr uint32_t SLAB_MASK = SLAB_SIZE - 1;
   static constexpr uint32_t MAX_SLABS = 64; // Supports up to ~67 Million Orders
+  // according to calculation it actually only uses 1 slab for the entire run
 
   T *slabs[MAX_SLABS]{nullptr};
   uint32_t num_slabs = 0;
@@ -19,18 +21,26 @@ private:
       std::numeric_limits<uint32_t>::max(); // Intrusive Free-List Head
 
   void allocate_slab() {
+    std::cout << "slab allocation: " << num_slabs << "\n";
+
     assert(num_slabs < MAX_SLABS && "Exceeded maximum slab capacity!");
 
-    size_t slab_bytes = sizeof(T) * SLAB_SIZE;
-    void *raw_ptr = nullptr;
+    size_t raw_slab_bytes = sizeof(T) * SLAB_SIZE;
+    constexpr size_t HUGE_PAGE_SIZE = 2 * 1024 * 1024;
+    size_t slab_bytes =
+        (raw_slab_bytes + (HUGE_PAGE_SIZE - 1)) & ~(HUGE_PAGE_SIZE - 1);
 
-    int res = posix_memalign(&raw_ptr, 2 * 1024 * 1024, slab_bytes);
-    assert(res == 0 && "Failed to allocate 2MB aligned memory slab!");
+    void *raw_ptr =
+        ::mmap(nullptr, slab_bytes, PROT_READ | PROT_WRITE,
+               MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB | MAP_POPULATE, -1, 0);
+
+    if (raw_ptr == MAP_FAILED) {
+      throw std::runtime_error("No Huge Page SlabAllocator...");
+    }
 
     T *newSlab = static_cast<T *>(raw_ptr);
-    madvise(newSlab, slab_bytes, MADV_HUGEPAGE);
-
     slabs[num_slabs] = newSlab;
+
     uint32_t base_index = num_slabs * SLAB_SIZE;
     uint32_t start_offset = (base_index == 0) ? 1 : 0;
 
@@ -50,9 +60,14 @@ public:
   SlabAllocator() { allocate_slab(); }
 
   ~SlabAllocator() {
-    for (uint32_t i = 0; i < num_slabs; ++i) {
+    size_t raw_slab_bytes = sizeof(T) * SLAB_SIZE;
+    constexpr size_t HUGE_PAGE_SIZE = 2 * 1024 * 1024;
+    size_t slab_bytes =
+        (raw_slab_bytes + (HUGE_PAGE_SIZE - 1)) & ~(HUGE_PAGE_SIZE - 1);
+
+    for (uint32_t i = 0; i < num_slabs; i++) {
       if (slabs[i]) {
-        std::free(slabs[i]);
+        ::munmap(slabs[i], slab_bytes);
       }
     }
   }

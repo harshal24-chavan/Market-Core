@@ -4,11 +4,14 @@
 #include "FlatHashTable.hpp"
 #include "Order.hpp"
 #include "PageAllocator.hpp"
+#include "SIMDOrderMap.hpp"
 #include "SingleStockBook.hpp"
 #include "SlabAllocator.hpp"
 #include "messages.hpp"
 #include <atomic>
 #include <cassert>
+#include <stdexcept>
+#include <sys/mman.h>
 
 inline uint32_t to_dense_index(uint32_t itch_price) noexcept {
   // Sub-dollar prices ($0.0000 to $0.9999) keep 0.0001 granularity
@@ -22,6 +25,7 @@ inline uint32_t to_dense_index(uint32_t itch_price) noexcept {
 
 std::atomic<uint64_t> drop_count{0};
 std::uint32_t PRICE_LIMIT = 2097152;
+uint32_t open_order{0};
 
 class MarketManager {
 private:
@@ -29,12 +33,59 @@ private:
 
   SlabAllocator<Order> global_pool;
   OrderMap global_map;
+  // SIMDOrderMap global_map;
   PageAllocator global_pages;
-  SingleStockBook stock_books[10000];
+
+  // SingleStockBook stock_books[10000];
+  SingleStockBook *stock_books{nullptr};
+
   TreeAllocator global_trees;
 
+  uint32_t NUM_BOOKS = 10000;
+  size_t book_size = 0;
+
 public:
+  MarketManager() {
+    book_size = sizeof(SingleStockBook) * NUM_BOOKS;
+    stock_books = static_cast<SingleStockBook *>(::mmap(
+        nullptr, book_size, PROT_READ | PROT_WRITE,
+        MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB | MAP_POPULATE, -1, 0));
+
+    if (stock_books == MAP_FAILED) {
+      throw std::runtime_error("NO HUGE PAGE...");
+    }
+    std::cout << "HUGE PAGE  Allocated for stock books....\n";
+
+    ::madvise(stock_books, book_size, MADV_HUGEPAGE);
+
+    if (::mlock(stock_books, book_size) != 0) {
+      std::cerr << "Warning: mlock failed on Stock Books. Run with sudo.\n";
+    }
+
+    for (size_t i = 0; i < NUM_BOOKS; ++i) {
+      new (&stock_books[i]) SingleStockBook();
+    }
+  }
+
+  ~MarketManager() {
+    if (!stock_books || stock_books == MAP_FAILED) {
+      return;
+    }
+
+    for (size_t i = 0; i < NUM_BOOKS; ++i) {
+      stock_books[i].~SingleStockBook();
+    }
+
+    munmap(stock_books, book_size);
+  }
+
+  inline void prefetch_order(uint64_t order_id) const noexcept {
+    // global_map.prefetch(order_id);
+  }
+
   void process_add(const AddOrder *msg, uint16_t locate_code) noexcept {
+    open_order++;
+
     uint32_t price = bswap32(msg->price);
     uint32_t dense_price = to_dense_index(price);
     uint8_t side = (msg->buySellIndicator == 'B') ? 0 : 1;
@@ -59,6 +110,7 @@ public:
   }
 
   void process_delete(uint64_t order_id) noexcept {
+
     auto *slot = global_map.get(order_id);
     if (!slot)
       return;
@@ -70,6 +122,7 @@ public:
     stock_books[locate_code].cancel_order(order_index, global_pool,
                                           global_pages, global_trees);
 
+    open_order--;
     global_map.erase(order_id);
   }
 
@@ -87,8 +140,10 @@ public:
     bool isDead = stock_books[locate_code].execute_order(
         order_index, executed_shares, global_pool, global_pages, global_trees);
 
-    if (isDead)
+    if (isDead) {
       global_map.erase(order_id);
+      open_order--;
+    }
   }
 
   void process_cancel(uint64_t order_id, uint32_t canceled_shares) noexcept {
@@ -103,8 +158,10 @@ public:
     bool isDead = stock_books[locate_code].partial_cancel_order(
         order_index, canceled_shares, global_pool, global_pages, global_trees);
 
-    if (isDead)
+    if (isDead) {
       global_map.erase(order_id);
+      open_order--;
+    }
   }
 
   void process_replace(const OrderReplace *msg) noexcept {

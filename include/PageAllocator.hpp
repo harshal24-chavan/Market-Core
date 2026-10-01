@@ -1,8 +1,14 @@
 #pragma once
+#include <algorithm> // Required for std::fill
 #include <cstdint>
 #include <cstring>
+#include <iostream>
+#include <limits>
 #include <stdexcept>
 #include <sys/mman.h>
+#include <sys/types.h>
+
+constexpr uint16_t NULL_SLOT = std::numeric_limits<uint16_t>::max();
 
 struct alignas(16) PriceLevel {
   uint32_t head_index{NULL_INDEX};
@@ -18,45 +24,58 @@ private:
 
 public:
   explicit PageAllocator(uint32_t max_pages = 50000) {
-    size_t bytes = max_pages * 4096 * sizeof(PriceLevel);
+    size_t raw_bytes = max_pages * 4096 * sizeof(PriceLevel);
+    constexpr size_t HUGE_PAGE_SIZE = 2 * 1024 * 1024;
+    size_t bytes = (raw_bytes + (HUGE_PAGE_SIZE - 1)) & ~(HUGE_PAGE_SIZE - 1);
 
-    // Allocate anonymously. Use huge pages
-    memory_pool =
-        static_cast<PriceLevel *>(::mmap(nullptr, bytes, PROT_READ | PROT_WRITE,
-                                         MAP_PRIVATE | MAP_ANONYMOUS, -1, 0));
+    memory_pool = static_cast<PriceLevel *>(::mmap(
+        nullptr, bytes, PROT_READ | PROT_WRITE,
+        MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB | MAP_POPULATE, -1, 0));
 
     if (memory_pool == MAP_FAILED)
       throw std::runtime_error("Page Allocator OOM");
 
     ::madvise(memory_pool, bytes, MADV_HUGEPAGE);
 
-    size_t total_elements = max_pages * 4096;
-    for (size_t i = 0; i < total_elements; ++i) {
-      memory_pool[i].head_index = NULL_INDEX;
-      memory_pool[i].tail_index = NULL_INDEX;
-      memory_pool[i].total_volume = 0;
-      memory_pool[i].order_count = 0;
-    }
+    std::cout << "PageAllocator Virtual Memory Reserved: "
+              << (bytes / (1024 * 1024)) << " MB\n";
   }
 
-  inline PriceLevel *allocate_page() noexcept {
-    return &memory_pool[(next_free_page++) * 4096];
+  inline PriceLevel *get_page(uint32_t index) noexcept {
+    return memory_pool + (index * 4096);
+  }
+
+  inline uint16_t allocate_page() noexcept {
+    uint16_t assigned_page = next_free_page++;
+    PriceLevel *page_start = get_page(assigned_page);
+
+    for (int i = 0; i < 4096; ++i) {
+      page_start[i].head_index = NULL_INDEX;
+      page_start[i].tail_index = NULL_INDEX;
+    }
+
+    return assigned_page;
   }
 };
 
 class PagedPriceArray {
 private:
-  PriceLevel *pages[2048] = {nullptr};
+  uint16_t pages[512];
 
 public:
+  PagedPriceArray() {
+    std::fill(std::begin(pages), std::end(pages), NULL_SLOT);
+  }
+
   inline PriceLevel &get_level(uint32_t dense_price,
                                PageAllocator &global_alloc) noexcept {
     uint32_t page_id = dense_price >> 12;
     uint32_t offset = dense_price & 0x0FFF;
 
-    if (__builtin_expect(pages[page_id] == nullptr, 0)) {
+    if (__builtin_expect(pages[page_id] == NULL_SLOT, 0)) {
       pages[page_id] = global_alloc.allocate_page();
     }
-    return pages[page_id][offset];
+
+    return global_alloc.get_page(pages[page_id])[offset];
   }
 };
