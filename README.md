@@ -25,24 +25,26 @@ An ultra-low-latency, zero-allocation C++20 trading engine engineered to replay 
 | **Replace ('U')**       | 36,777,372  | **389 ns**  | 891 ns | 1,411 ns | ~4.4 ms  |
 
 ### Hardware & OS Telemetry (`perf stat`)
-To validate the mechanical sympathy of the engine, execution was profiled using hardware performance counters. The results below confirm absolute zero OS scheduler interference and highly efficient memory access patterns due to 2MB Transparent Huge Pages (THP) and memory pooling.
+To validate the mechanical sympathy of the engine, execution was profiled using hardware performance counters. The results below confirm absolute zero OS scheduler interference and efficient memory access patterns due to 2MB Explicit Huge Pages and memory pooling.
 
 *(Note: Latency histograms were captured in a separate instrumented build. The telemetry below reflects the pure throughput build with `RDTSCP` pipeline-stalls removed).*
 
 ```text
  Performance counter stats for './itch_engine':
 
-    74,887,755,603      instructions:u            #    0.32  insn per cycle
-   234,057,354,755      cycles:u                  
-     2,943,600,826      L1-dcache-load-misses:u   
-     1,206,567,786      LLC-load-misses:u         
-    17,106,292,730      dTLB-loads:u              
-     1,226,955,046      dTLB-load-misses:u        
+   307,581,746,188      cycles                                                                  (49.99%)
+    95,991,879,308      instructions                                                            (62.51%)
+     2,239,066,292      LLC-loads                                                               (62.49%)
+     1,534,331,894      LLC-load-misses                                                         (62.48%)
+     2,810,511,476      cache-references                                                        (62.48%)
+     1,831,807,487      cache-misses                                                            (62.53%)
+    21,214,308,910      dtlb-load                                                               (49.99%)
+       986,133,397      dtlb-load-misses                                                        (50.03%)
 
-       322.092645320 seconds time elapsed
+     258.387173703 seconds time elapsed
 
-        76.773779000 seconds user
-        23.630507000 seconds sys
+      91.152077000 seconds user
+      10.979294000 seconds sys
 ```
 
 ![FlameGraph](https://raw.githubusercontent.com/harshal24-chavan/Market-Core/4804161b143a7a7cc478599f42cacd3d81fefe96/itch_flamegraph.svg)
@@ -104,7 +106,7 @@ flowchart LR
 
 ### 1. Slab Allocator (`Order` Management)
 * **Purpose:** Manages the lifecycle of high-frequency `Order` mutations across 423 million ITCH messages without triggering standard heap allocations (`malloc`/`new`).
-* **Mechanical Design:** Pre-allocates memory blocks aligned to exact 2 MB boundaries using `posix_memalign` and backs them with Transparent Huge Pages (`MADV_HUGEPAGE`) to minimize Translation Lookaside Buffer (TLB) misses.
+* **Mechanical Design:** Pre-allocates memory blocks aligned to exact 2 MB boundaries and backs them with  Huge Pages (`MAP_HUGETLB`) to minimize Translation Lookaside Buffer (TLB) misses.
 * **Intrusive Free-List:** Bypasses external bookkeeping structures by embedding free-list pointers directly inside dead or unallocated order slots. When an order is created or canceled, recycling happens in absolute $O(1)$ time with zero branching overhead.
 * **Initialization Safety:** Initialized as a `std::unique_ptr` inside `main()` to prevent pre-boot termination and ensure deterministic memory layout before the streaming loop starts.
 
@@ -117,8 +119,7 @@ flowchart LR
   
 ### 3. Paged Price Levels (`ArenaAllocator`)
 * **Purpose:** Stores contiguous arrays of price tiers (bids and asks) for every active order book.
-* **Arena Allocation Strategy:** Replaces fragmented heap nodes with a **Page Allocator** backed by `mmap`. Virtual memory is reserved upfront, but physical RAM is mapped lazily on a per-symbol basis.
-
+* **Arena Allocation Strategy:** Replaces fragmented heap nodes with a **Page Allocator** backed by `mmap & MAP_HUGETLB`. 
 ### 4. Paged Bitmask Tree (Best Bid / Offer Engine)
 * **Purpose:** Tracks order book price states to query the Best Bid and Best Offer (BBO) in constant time.
 * **Hierarchical Bitwise Architecture:** Replaces traditional pointer-heavy binary trees or sorted vectors with a flat, multi-level bitmask structure ($4,096$ words at the bottom level, $64$ words at the middle level, and a single root word).
