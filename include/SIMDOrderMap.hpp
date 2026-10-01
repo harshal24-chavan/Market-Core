@@ -25,12 +25,12 @@ private:
   static constexpr uint8_t DELETED = 0XFE; // 11111110
 
   inline uint64_t hash(uint64_t key) const noexcept {
-    // key ^= key >> 33;
-    // key *= 0xff51afd7ed558ccdULL;
-    // key ^= key >> 33;
-    // return key;
+    key ^= key >> 33;
+    key *= 0xff51afd7ed558ccdULL;
+    key ^= key >> 33;
+    return key;
 
-    return key * 0x9E3779B97F4A7C15ULL;
+    // return key * 0x9E3779B97F4A7C15ULL;
   }
 
   inline uint64_t getH1(uint64_t hash) const noexcept {
