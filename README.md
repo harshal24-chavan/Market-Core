@@ -2,7 +2,7 @@
 
 # ⚡ Deterministic NASDAQ ITCH 5.0 Limit Order Book Replay Engine
 
-An ultra-low-latency, zero-allocation C++20 trading engine engineered to replay NASDAQ ITCH 5.0 market data at **5.51 million messages per second** with **nanosecond-scale tail latency** (**141 ns median Add**, **113 ns median Cancel**, **<1.5us p99**).
+An ultra-low-latency, zero-allocation C++20 trading engine engineered to replay NASDAQ ITCH 5.0 market data at **≈ 1.638 million msg/s** with **nanosecond-scale tail latency** (**141 ns median Add**, **113 ns median Cancel**, **<1.5us p99**).
 
 ---
 
