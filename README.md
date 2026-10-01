@@ -8,7 +8,7 @@ An ultra-low-latency, zero-allocation C++20 trading engine engineered to replay 
 
 ## 📊 Performance & Benchmarks
 
-* **Throughput:** 5.51 Million msgs/sec pure CPU throughput (423M total messages).
+* **Throughput:** 1.638 Million msgs/sec pure CPU throughput (423M total messages).
 * **Deterministic Execution:** Achieved deterministic low latency via $O(1)$ lazy deletion tombstones and strict CPU thread-pinning to ensure zero context switches.
 
 
